@@ -1,0 +1,164 @@
+#include <FIR.h>
+#include <TaskScheduler.h>
+#define FILTER_TAP_NUM 101  
+
+static double filter_taps [FILTER_TAP_NUM]= {
+                   0,1.155709128475e-06,-1.458582377326e-05,-1.096653271311e-05,
+  -1.461249074264e-05,-0.000130056988579,-3.52926443603e-05,-6.877183374706e-05,
+  -0.0002882178367062,0.0001238251732489,-9.405486208631e-19,-0.0002029606915019,
+  0.0007803676471795,0.0003127346490075,0.0002771921455782, 0.001844141168541,
+  0.0004014001889431,0.0006571569576195, 0.002389718658074,-0.0009119161529229,
+  -2.872331062198e-18, 0.001237855653337,-0.004407224734964,-0.001649607561551,
+  -0.001375312193216,-0.008658109328526, -0.00179245125971,-0.002803782309067,
+  -0.009781266475095, 0.003594209830774,-1.192353791969e-17,-0.004571515116049,
+    0.01583509925589, 0.005785904141555, 0.004725459573307,  0.02924960868759,
+   0.005977624624648, 0.009270865363658,  0.03222724432265, -0.01186796339927,
+  1.986284794525e-17,  0.01549522703133, -0.05516864565291, -0.02099517494002,
+   -0.01817776095588,  -0.1222639143044, -0.02816830787589, -0.05228425024306,
+    -0.2433353687405,   0.1588989923856,   0.6000055733928,   0.1588989923856,
+    -0.2433353687405, -0.05228425024306, -0.02816830787589,  -0.1222639143044,
+   -0.01817776095588, -0.02099517494002, -0.05516864565291,  0.01549522703133,
+  1.986284794525e-17, -0.01186796339927,  0.03222724432265, 0.009270865363658,
+   0.005977624624648,  0.02924960868759, 0.004725459573307, 0.005785904141555,
+    0.01583509925589,-0.004571515116049,-1.192353791969e-17, 0.003594209830774,
+  -0.009781266475095,-0.002803782309067, -0.00179245125971,-0.008658109328526,
+  -0.001375312193216,-0.001649607561551,-0.004407224734964, 0.001237855653337,
+  -2.872331062198e-18,-0.0009119161529229, 0.002389718658074,0.0006571569576195,
+  0.0004014001889431, 0.001844141168541,0.0002771921455782,0.0003127346490075,
+  0.0007803676471795,-0.0002029606915019,-9.405486208631e-19,0.0001238251732489,
+  -0.0002882178367062,-6.877183374706e-05,-3.52926443603e-05,-0.000130056988579,
+  -1.461249074264e-05,-1.096653271311e-05,-1.458582377326e-05,1.155709128475e-06,
+                   0
+};
+
+
+#define ADC A0
+float resultado;
+
+FIR<double, FILTER_TAP_NUM> fir_filter;
+void samplingfunction();
+
+Task samplingTask(10, TASK_FOREVER, &samplingfunction);
+
+Scheduler runner;
+
+#include "arduinoFFT.h"
+arduinoFFT FFT = arduinoFFT();
+
+#define CHANNEL A7
+const uint16_t samples = 128; //This value MUST ALWAYS be a power of 2
+const double samplingFrequency = 1000; //Hz, must be less than 10000 due to ADC
+
+unsigned int sampling_period_us;
+unsigned long microseconds;
+
+/*
+These are the input and output vectors
+Input vectors receive computed results from FFT
+*/
+double vReal[samples];
+double vImag[samples];
+
+#define SCL_INDEX 0x00
+#define SCL_TIME 0x05
+#define SCL_FREQUENCY 0x02
+#define SCL_PLOT 0x03
+
+char command='r';
+
+void setup() {
+  sampling_period_us = round(1000000*(1.0/samplingFrequency));
+  Serial.begin(115200);
+  while(!Serial);
+  Serial.println("Ready");
+    
+  fir_filter.setFilterCoeffs(filter_taps);
+
+  runner.addTask(samplingTask);
+  samplingTask.enable();
+}
+
+void loop() {
+  if (Serial.available()) {
+    char r=Serial.read();
+    command='f';
+  }
+  if (command=='f') {
+    fft();
+  } else if (command=='r') {
+    fir();
+  }
+}
+
+void fir() {
+  runner.execute();
+}
+
+void fft() {
+ /*SAMPLING*/
+  microseconds = micros();
+  for(int i=0; i<samples; i++)
+  {
+      vReal[i] = analogRead(CHANNEL);
+      vImag[i] = 0;
+      while(micros() - microseconds < sampling_period_us){
+        //empty loop
+      }
+      microseconds += sampling_period_us;
+  }
+  /* Print the results of the sampling according to time */
+  //Serial.println("Data:");
+    //PrintVector(vReal, samples, SCL_TIME);
+  //FFT.Windowing(vReal, samples, FFT_WIN_TYP_HAMMING, FFT_FORWARD); /* Weigh data */
+  //Serial.println("Weighed data:");
+  //PrintVector(vReal, samples, SCL_TIME);
+  //FFT.Compute(vReal, vImag, samples, FFT_FORWARD); /* Compute FFT */
+  //Serial.println("Computed Real values:");
+  //PrintVector(vReal, samples, SCL_INDEX);
+  //Serial.println("Computed Imaginary values:");
+  //PrintVector(vImag, samples, SCL_INDEX);
+  FFT.ComplexToMagnitude(vReal, vImag, samples); /* Compute magnitudes */
+  Serial.println("Computed magnitudes:");
+  PrintVector(vReal, (samples >> 1), SCL_FREQUENCY);
+  double x = FFT.MajorPeak(vReal, samples, samplingFrequency);
+  //Serial.println(x, 6); //Print out what frequency is the most dominant.
+  delay(2000); /* Repeat after delay */
+  command='r';
+}
+
+void samplingfunction()
+{
+  resultado =analogRead(A7);
+  //erial.print(analogRead(A7));
+  //Serial.print(",");
+  Serial.print(String(fir_filter.processReading(resultado))+";");
+}
+
+void PrintVector(double *vData, uint16_t bufferSize, uint8_t scaleType)
+{
+  for (uint16_t i = 0; i < bufferSize; i++)
+  {
+    double abscissa;
+    /* Print abscissa value */
+    switch (scaleType)
+    {
+      case SCL_INDEX:
+        abscissa = (i * 1.0);
+  break;
+      case SCL_TIME:
+        abscissa = ((i * 1.0) / samplingFrequency);
+  break;
+      case SCL_FREQUENCY:
+        abscissa = ((i * 1.0 * samplingFrequency) / samples);
+  break;
+    }
+    Serial.print(abscissa, 3);
+    Serial.println(";");
+    //if(scaleType==SCL_FREQUENCY)
+    //Serial.print("Hz");
+    //Serial.print(" ");
+    //Serial.println(vData[i], 4);
+    delay(10);
+  }
+  //Serial.println();
+}
